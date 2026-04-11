@@ -1,17 +1,68 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tokio::fs as tokio_fs;
 use tokio::task::JoinSet;
 
+#[derive(Debug, Clone)]
+struct PidProc {
+    file: PathBuf,
+    name: Option<String>,
+}
+
+impl FromStr for PidProc {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Handle brace format: {path,name} or {path}
+        if s.starts_with('{') && s.ends_with('}') {
+            let inner = &s[1..s.len() - 1];
+            let parts: Vec<&str> = inner.split(',').collect();
+            let mut file = String::new();
+            let mut name = None;
+
+            for (i, part) in parts.iter().enumerate() {
+                let trimmed = part.trim().trim_matches('\'').trim_matches('"');
+                if i == 0 {
+                    file = trimmed.to_string();
+                } else if i == 1 {
+                    name = Some(trimmed.to_string());
+                }
+            }
+            if file.is_empty() {
+                anyhow::bail!("PID file path cannot be empty in brace format");
+            }
+            return Ok(PidProc {
+                file: PathBuf::from(file),
+                name,
+            });
+        }
+
+        // Handle path=name format
+        if let Some((path, name)) = s.split_once('=') {
+            return Ok(PidProc {
+                file: PathBuf::from(path),
+                name: Some(name.to_string()),
+            });
+        }
+
+        // Handle plain path format
+        Ok(PidProc {
+            file: PathBuf::from(s),
+            name: None,
+        })
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Check for and remove stale process ID files")]
 struct Args {
-    /// List of PID files to check. Format: <path> or <path>=<process_name>
+    /// List of PID files to check. Format: <path>, <path>=<process_name>, or {<path>,<process_name>}
     #[arg(short = 'p', num_args = 1..)]
-    pid_files: Option<Vec<String>>,
+    pid_files: Option<Vec<PidProc>>,
 
     /// Directory to scan for PID files
     #[arg(short = 'd')]
@@ -72,10 +123,9 @@ async fn main() -> Result<()> {
     let mut tasks = JoinSet::new();
 
     if let Some(ref pids) = args.pid_files {
-        for p in pids {
-            let parts: Vec<&str> = p.splitn(2, '=').collect();
-            let file = PathBuf::from(parts[0]);
-            let name = parts.get(1).map(|s| s.to_string()).or(global_name.clone());
+        for pid_proc in pids {
+            let name = pid_proc.name.clone().or(global_name.clone());
+            let file = pid_proc.file.clone();
             let sys_clone = Arc::clone(&sys);
             tasks.spawn(async move {
                 handle_pid_file(sys_clone, file, name).await
@@ -114,4 +164,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
