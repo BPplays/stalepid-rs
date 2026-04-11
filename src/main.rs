@@ -6,6 +6,8 @@ use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tokio::fs as tokio_fs;
 use tokio::task::JoinSet;
+use quoted_string::to_content;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 struct PidProc {
@@ -20,21 +22,15 @@ impl FromStr for PidProc {
         // Handle brace format: {path,name} or {path}
         if s.starts_with('{') && s.ends_with('}') {
             let inner = &s[1..s.len() - 1];
-            let parts: Vec<&str> = inner.split(',').collect();
-            let mut file = String::new();
-            let mut name = None;
+            let parts = split_respecting_quotes(inner);
 
-            for (i, part) in parts.iter().enumerate() {
-                let trimmed = part.trim().trim_matches('\'').trim_matches('"');
-                if i == 0 {
-                    file = trimmed.to_string();
-                } else if i == 1 {
-                    name = Some(trimmed.to_string());
-                }
-            }
-            if file.is_empty() {
+            if parts.is_empty() {
                 anyhow::bail!("PID file path cannot be empty in brace format");
             }
+
+            let file = parse_quoted_part(parts.get(0).unwrap_or(&String::new()))?;
+            let name = parts.get(1).and_then(|p| parse_quoted_part(p).ok());
+
             return Ok(PidProc {
                 file: PathBuf::from(file),
                 name,
@@ -44,17 +40,60 @@ impl FromStr for PidProc {
         // Handle path=name format
         if let Some((path, name)) = s.split_once('=') {
             return Ok(PidProc {
-                file: PathBuf::from(path),
-                name: Some(name.to_string()),
+                file: PathBuf::from(parse_quoted_part(path)?),
+                name: Some(parse_quoted_part(name)?),
             });
         }
 
         // Handle plain path format
         Ok(PidProc {
-            file: PathBuf::from(s),
+            file: PathBuf::from(parse_quoted_part(s)?),
             name: None,
         })
     }
+}
+
+fn parse_quoted_part(s: &str) -> Result<String, anyhow::Error> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Empty value provided");
+    }
+
+    let qs = quoted_string::parse(trimmed)
+        .map_err(|e| anyhow::anyhow!("Invalid quoting in part '{}': {}", trimmed, e))?;
+
+    let con = quoted_string::to_content(qs).unwrap_or(Cow::Owned(""));
+    Ok(con.into_owned())
+}
+
+fn split_respecting_quotes(s: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = ' ';
+
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if (c == '"' || c == '\'') && (!in_quotes || quote_char == c) {
+            if in_quotes {
+                in_quotes = false;
+            } else {
+                in_quotes = true;
+                quote_char = c;
+            }
+            current.push(c);
+        } else if c == ',' && !in_quotes {
+            result.push(current.trim().to_string());
+            current = String::new();
+        } else {
+            current.push(c);
+        }
+        i += 1;
+    }
+    result.push(current.trim().to_string());
+    result
 }
 
 #[derive(Parser, Debug)]
@@ -80,7 +119,7 @@ struct Args {
 async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>) -> Result<bool> {
     let content = tokio_fs::read_to_string(pid_path).await?;
     let pid_str = content.trim();
-    
+
     if pid_str.is_empty() {
         return Ok(true);
     }

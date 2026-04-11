@@ -165,6 +165,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "quoted-string",
  "sysinfo",
  "tokio",
 ]
@@ -266,6 +267,12 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "quoted-string"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a206a30ce37189d1340e7da2ee0b4d65e342590af676541c23a4f3959ba272e"
 
 [[package]]
 name = "redox_syscall"
