@@ -1,14 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tokio::fs as tokio_fs;
-
-#[derive(Debug)]
-struct PidProc {
-    file: PathBuf,
-    name: Option<String>,
-}
+use tokio::task::JoinSet;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Check for and remove stale process ID files")]
@@ -30,10 +26,10 @@ struct Args {
     process_name: Option<String>,
 }
 
-async fn is_pid_stale(sys: &mut System, pid_path: &Path, expected_name: Option<&str>) -> Result<bool> {
+async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>) -> Result<bool> {
     let content = tokio_fs::read_to_string(pid_path).await?;
     let pid_str = content.trim();
-
+    
     if pid_str.is_empty() {
         return Ok(true);
     }
@@ -43,7 +39,6 @@ async fn is_pid_stale(sys: &mut System, pid_path: &Path, expected_name: Option<&
     })?;
 
     let pid = Pid::from(pid_val);
-    sys.refresh_all();
 
     if let Some(process) = sys.process(pid) {
         if let Some(name) = expected_name {
@@ -57,8 +52,8 @@ async fn is_pid_stale(sys: &mut System, pid_path: &Path, expected_name: Option<&
     Ok(true)
 }
 
-async fn handle_pid_file(sys: &mut System, path: PathBuf, expected_name: Option<&str>) -> Result<()> {
-    if is_pid_stale(sys, &path, expected_name).await? {
+async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: Option<String>) -> Result<()> {
+    if is_pid_stale(&sys, &path, expected_name.as_deref()).await? {
         tokio_fs::remove_file(&path).await
             .with_context(|| format!("Failed to remove stale pid file {:?}", path))?;
         println!("Removed stale pid file: {:?}", path);
@@ -69,17 +64,22 @@ async fn handle_pid_file(sys: &mut System, path: PathBuf, expected_name: Option<
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let mut sys = System::new_all();
-    let global_name = args.process_name.as_deref();
+    let mut sys_raw = System::new_all();
+    sys_raw.refresh_all();
+    let sys = Arc::new(sys_raw);
+    let global_name = args.process_name.clone();
 
-    let mut files_to_check = Vec::new();
+    let mut tasks = JoinSet::new();
 
-    if let Some(pids) = args.pid_files.as_ref() {
+    if let Some(ref pids) = args.pid_files {
         for p in pids {
             let parts: Vec<&str> = p.splitn(2, '=').collect();
             let file = PathBuf::from(parts[0]);
-            let name = parts.get(1).map(|s| s.to_string());
-            files_to_check.push(PidProc { file, name });
+            let name = parts.get(1).map(|s| s.to_string()).or(global_name.clone());
+            let sys_clone = Arc::clone(&sys);
+            tasks.spawn(async move {
+                handle_pid_file(sys_clone, file, name).await
+            });
         }
     }
 
@@ -90,9 +90,10 @@ async fn main() -> Result<()> {
             if path.is_file() {
                 let path_str = path.to_string_lossy();
                 if path_str.ends_with(&args.extension) {
-                    files_to_check.push(PidProc {
-                        file: path,
-                        name: None,
+                    let name = global_name.clone();
+                    let sys_clone = Arc::clone(&sys);
+                    tasks.spawn(async move {
+                        handle_pid_file(sys_clone, path, name).await
                     });
                 }
             }
@@ -103,13 +104,14 @@ async fn main() -> Result<()> {
         anyhow::bail!("Either -p or -d must be specified");
     }
 
-    // Process specific files
-    for pid_proc in files_to_check {
-        let name = pid_proc.name.as_deref().or(global_name);
-        if let Err(e) = handle_pid_file(&mut sys, pid_proc.file, name).await {
+    while let Some(res) = tasks.join_next().await {
+        if let Err(e) = res {
+            eprintln!("Task panicked: {}", e);
+        } else if let Ok(Err(e)) = res {
             eprintln!("Error processing file: {}", e);
         }
     }
 
     Ok(())
 }
+
