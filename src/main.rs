@@ -319,11 +319,16 @@ mod tests {
     fn test_between_chars_basic() {
         assert_eq!(between_chars("hello", 'h', 'o'), Some("ell"));
         assert_eq!(between_chars("hello", 'e', 'l'), Some(""));
+        assert_eq!(between_chars("abcdef", 'a', 'f'), Some("bcde"));
+        assert_eq!(between_chars("abcdef", 'b', 'f'), Some("cde"));
+        assert_eq!(between_chars("abcdef", 'b', 'e'), Some("cd"));
     }
 
     #[test]
     fn test_between_chars_unicode() {
         assert_eq!(between_chars("🦀hello🦀", '🦀', '🦀'), Some("hello"));
+        assert_eq!(between_chars("🦀hel🦀loに", '🦀', 'に'), Some("hel🦀lo"));
+        assert_eq!(between_chars("abcあいおdef", 'b', 'e'), Some("cあいおd"));
     }
 
     #[test]
@@ -341,6 +346,7 @@ mod tests {
     fn test_parse_quoted_success() {
         assert_eq!(parse_quoted("\"test\"").unwrap(), "test");
         assert_eq!(parse_quoted("\"\"").unwrap(), "");
+        assert_eq!(parse_quoted("\"日本語abcあいお\"").unwrap(), "日本語abcあいお");
     }
 
     #[test]
@@ -348,5 +354,6 @@ mod tests {
         assert!(parse_quoted("test\"").is_err());
         assert!(parse_quoted("\"test").is_err());
         assert!(parse_quoted("test").is_err());
+        assert!(parse_quoted("\"test'").is_err());
     }
 }
