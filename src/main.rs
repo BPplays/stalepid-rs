@@ -19,10 +19,29 @@ struct PidProc {
 	name: String,
 }
 
+fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
+    let start = s.find(left)? + left.len_utf8();
+    let rest = &s[start..];
+    let end = rest.find(right)?;
+    Some(&rest[..end])
+}
+
+#[derive(Debug)]
+enum ParseError {
+    MissingQuotedString,
+}
+
+fn parse_quoted(i: &str) -> Result<&str> {
+    between_chars(i, '"', '"')
+        .ok_or(ParseError::MissingQuotedString)
+        .map_err(|e| anyhow::anyhow!("{:?}", e))
+}
+
 impl FromStr for PidProc {
 	type Err = anyhow::Error;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
+
 		if s.starts_with('{') && s.ends_with('}') {
 			let inner = &s[1..s.len() - 1];
 			let parts: Vec<&str> = inner.split(',').collect();
@@ -30,7 +49,8 @@ impl FromStr for PidProc {
 			let mut name: Option<String> = None;
 
 			for (i, part) in parts.iter().enumerate() {
-				let trimmed = part.trim().trim_matches('\'').trim_matches('"');
+				let trimmed = part.trim();
+				let trimmed = parse_quoted(trimmed)?;
 				if i == 0 {
 					file = trimmed.to_string();
 				} else if i == 1 {
@@ -48,6 +68,9 @@ impl FromStr for PidProc {
 		}
 
 		if let Some((path, name)) = s.split_once('=') {
+			if path.is_empty() {
+				anyhow::bail!("PID file path cannot be empty");
+			}
 			if name.is_empty() {
 				return Err(anyhow::anyhow!("name was empty"));
 			}
@@ -60,11 +83,6 @@ impl FromStr for PidProc {
 
 
 		return Err(anyhow::anyhow!("name was never found"));
-
-		// Ok(PidProc {
-		// 	file: PathBuf::from(s),
-		// 	name: "".to_string(),
-		// })
 	}
 }
 
