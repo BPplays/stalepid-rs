@@ -192,6 +192,9 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: String)
 	let path_str = path.to_string_lossy();
 
 	if is_pid_stale(&sys, &path, &expected_name).await? {
+		if !path.to_string_lossy().is_empty() {
+			return Err(anyhow::anyhow!("path is empty"))
+		}
 		if !path.is_file() {
 			return Err(anyhow::anyhow!("path isn't file"))
 		}
