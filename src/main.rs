@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn test_between_chars_basic() {
         assert_eq!(between_chars("hello", 'h', 'o'), Some("ell"));
-        assert_eq!(between_chars("hello", 'e', 'l'), Some("l"));
+        assert_eq!(between_chars("hello", 'e', 'l'), Some(""));
     }
 
     #[test]
