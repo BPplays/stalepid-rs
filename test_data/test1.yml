@@ -1,0 +1,5 @@
+---
+- file: "/tmp/some-app.pid"
+  name: "some-app"
+- file: "/tmp/another-app.pid"
+  name: "another-app"
