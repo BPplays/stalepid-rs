@@ -192,6 +192,12 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: String)
 	let path_str = path.to_string_lossy();
 
 	if is_pid_stale(&sys, &path, &expected_name).await? {
+		if path.is_relative() {
+			return Err(anyhow::anyhow!("path shouldn't be relative"))
+		}
+		if !path.is_file() {
+			return Err(anyhow::anyhow!("path isn't file"))
+		}
 		tokio_fs::remove_file(&path).await
 			.with_context(|| format!("Failed to remove stale pid file {:?}", path))?;
 		info!(path = %path_str, "Removed stale pid file");
