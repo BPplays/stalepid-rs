@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -9,8 +10,9 @@ use tokio::task::JoinSet;
 use tracing::{info, warn, error};
 use tracing_subscriber::{fmt, prelude::*};
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
+use walkdir::WalkDir;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PidProc {
 	file: PathBuf,
 	name: Option<String>,
@@ -75,6 +77,10 @@ struct Args {
 	/// Process name to validate against.
 	/// Acts as fallback for -p files without explicit names and as the filter for -d.
 	process_name: Option<String>,
+
+	/// Path to a directory containing YAML files with PID/Process name pairs.
+	#[arg(long)]
+	pidpair_dir: Option<PathBuf>,
 
 	/// Path to the log file. If omitted, logs to terminal.
 	#[arg(long)]
@@ -156,6 +162,31 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: Option<
 	Ok(())
 }
 
+fn load_pid_pairs_from_dir(dir: &Path) -> Result<Vec<PidProc>> {
+	let mut entries: Vec<_> = WalkDir::new(dir)
+		.into_iter()
+		.filter_map(|e| e.ok())
+		.filter(|e| {
+			let path = e.path();
+			path.is_file() && 
+			(path.extension().map_or(false, |ext| ext == "yml" || ext == "yaml"))
+		})
+		.collect();
+
+	entries.sort_by(|a, b| a.path().cmp(b.path()));
+
+	let mut all_procs = Vec::new();
+	for entry in entries {
+		let content = std::fs::read_to_string(entry.path())
+			.with_context(|| format!("Failed to read config file {:?}", entry.path()))?;
+		let procs: Vec<PidProc> = serde_yaml::from_str(&content)
+			.with_context(|| format!("Failed to parse YAML in file {:?}", entry.path()))?;
+		all_procs.extend(procs);
+	}
+
+	Ok(all_procs)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
 	let args = Args::parse();
@@ -183,6 +214,18 @@ async fn main() -> Result<()> {
 		}
 	}
 
+	if let Some(ref dir) = args.pidpair_dir {
+		let pids = load_pid_pairs_from_dir(dir).with_context(|| format!("Failed to load pid pairs from {:?}", dir))?;
+		for pid_proc in pids {
+			let name = pid_proc.name.clone().or(global_name.clone());
+			let file = pid_proc.file.clone();
+			let sys_clone = Arc::clone(&sys);
+			tasks.spawn(async move {
+				handle_pid_file(sys_clone, file, name).await
+			});
+		}
+	}
+
 	if let Some(ref dir) = args.directory {
 		let mut entries = tokio_fs::read_dir(dir).await?;
 		while let Some(entry) = entries.next_entry().await? {
@@ -200,9 +243,9 @@ async fn main() -> Result<()> {
 		}
 	}
 
-	if args.pid_files.is_none() && args.directory.is_none() {
-		error!("Neither -p nor -d specified");
-		anyhow::bail!("Either -p or -d must be specified");
+	if args.pid_files.is_none() && args.directory.is_none() && args.pidpair_dir.is_none() {
+		error!("Neither -p, -d, nor --pidpair-dir specified");
+		anyhow::bail!("Either -p, -d, or --pidpair-dir must be specified");
 	}
 
 	while let Some(res) = tasks.join_next().await {
@@ -215,4 +258,5 @@ async fn main() -> Result<()> {
 
 	Ok(())
 }
+
 
