@@ -8,7 +8,7 @@ use sysinfo::{Pid, System};
 use tokio::fs as tokio_fs;
 use tokio::task::JoinSet;
 use tracing::{info, warn, error};
-use tracing_subscriber::{fmt, prelude::*};
+// use tracing_subscriber::{fmt, prelude::*};
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
 use walkdir::WalkDir;
 
