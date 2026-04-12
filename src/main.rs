@@ -358,6 +358,7 @@ mod tests {
 
 		// Test that the function doesn't panic when called
 		let result = load_pid_pairs_from_dir(Path::new(test_dir));
+		println!("{:#?}", result.as_ref().unwrap());
 
 		// This test makes sure the function compiles and doesn't crash
 		// with the test data directory that exists
