@@ -200,8 +200,8 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: String)
 	let path_str = path.to_string_lossy();
 
 	if is_pid_stale(&sys, &path, &expected_name).await? {
-		if !path.to_string_lossy().is_empty() {
-			return Err(anyhow::anyhow!("path is empty"))
+		if path.is_relative() {
+			return Err(anyhow::anyhow!("path shouldn't be relative"))
 		}
 		if !path.is_file() {
 			return Err(anyhow::anyhow!("path isn't file"))
@@ -311,4 +311,42 @@ async fn main() -> Result<()> {
 	Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn test_between_chars_basic() {
+        assert_eq!(between_chars("hello", 'h', 'o'), Some("ell"));
+        assert_eq!(between_chars("hello", 'e', 'l'), Some("l"));
+    }
+
+    #[test]
+    fn test_between_chars_unicode() {
+        assert_eq!(between_chars("🦀hello🦀", '🦀', '🦀'), Some("hello"));
+    }
+
+    #[test]
+    fn test_between_chars_empty() {
+        assert_eq!(between_chars("()", '(', ')'), Some(""));
+    }
+
+    #[test]
+    fn test_between_chars_missing() {
+        assert_eq!(between_chars("hello", 'z', 'o'), None);
+        assert_eq!(between_chars("hello", 'h', 'z'), None);
+    }
+
+    #[test]
+    fn test_parse_quoted_success() {
+        assert_eq!(parse_quoted("\"test\"").unwrap(), "test");
+        assert_eq!(parse_quoted("\"\"").unwrap(), "");
+    }
+
+    #[test]
+    fn test_parse_quoted_failure() {
+        assert!(parse_quoted("test\"").is_err());
+        assert!(parse_quoted("\"test").is_err());
+        assert!(parse_quoted("test").is_err());
+    }
+}
