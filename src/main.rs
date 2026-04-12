@@ -168,7 +168,7 @@ fn load_pid_pairs_from_dir(dir: &Path) -> Result<Vec<PidProc>> {
 		.filter_map(|e| e.ok())
 		.filter(|e| {
 			let path = e.path();
-			path.is_file() && 
+			path.is_file() &&
 			(path.extension().map_or(false, |ext| ext == "yml" || ext == "yaml"))
 		})
 		.collect();
