@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::option;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,21 +19,30 @@ struct PidProc {
 }
 
 fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
-    let start = s.find(left)? + left.len_utf8();
-    let rest = &s[start..];
-    let end = rest.find(right)?;
-    Some(&rest[..end])
+	let left_len = left.len_utf8();
+	// Find the start index after the left character
+	if let Some(start) = s.find(left) {
+		let start = start + left_len;
+		if start < s.len() {
+			let rest = &s[start..];
+			// Find the right character in the remaining string
+			if let Some(end) = rest.find(right) {
+				return Some(&rest[..end]);
+			}
+		}
+	}
+	None
 }
 
 #[derive(Debug)]
 enum ParseError {
-    MissingQuotedString,
+	MissingQuotedString,
 }
 
 fn parse_quoted(i: &str) -> Result<&str> {
-    between_chars(i, '"', '"')
-        .ok_or(ParseError::MissingQuotedString)
-        .map_err(|e| anyhow::anyhow!("{:?}", e))
+	between_chars(i, '"', '"')
+		.ok_or(ParseError::MissingQuotedString)
+		.map_err(|e| anyhow::anyhow!("{:?}", e))
 }
 
 impl FromStr for PidProc {
