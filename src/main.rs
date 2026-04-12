@@ -93,17 +93,17 @@ struct Args {
 	#[arg(short = 'p', num_args = 1..)]
 	pid_files: Option<Vec<PidProc>>,
 
-	/// Directory to scan for PID files
-	#[arg(short = 'd')]
-	directory: Option<PathBuf>,
+	// /// Directory to scan for PID files
+	// #[arg(short = 'd')]
+	// directory: Option<PathBuf>,
 
 	/// File extension to use when scanning a directory
 	#[arg(short = 'e', default_value = ".pid")]
 	extension: String,
 
-	/// Process name to validate against.
-	/// Acts as fallback for -p files without explicit names and as the filter for -d.
-	process_name: Option<String>,
+	// /// Process name to validate against.
+	// /// Acts as fallback for -p files without explicit names and as the filter for -d.
+	// process_name: Option<String>,
 
 	/// Path to a directory containing YAML files with PID/Process name pairs.
 	#[arg(long)]
@@ -148,7 +148,7 @@ fn init_logging(args: &Args) -> Result<()> {
 	Ok(())
 }
 
-async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>) -> Result<bool> {
+async fn is_pid_stale(sys: &System, pid_path: &Path, name: &str) -> Result<bool> {
 	let path_str = pid_path.to_string_lossy();
 	let content = tokio_fs::read_to_string(pid_path).await?;
 	let pid_str = content.trim();
@@ -165,12 +165,10 @@ async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>
 	let pid = Pid::from(pid_val);
 
 	if let Some(process) = sys.process(pid) {
-		if let Some(name) = expected_name {
-			let actual_name = process.name().to_string_lossy();
-			if actual_name != name {
-				warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, "Process name mismatch, marking as stale");
-				return Ok(true);
-			}
+		let actual_name = process.name().to_string_lossy();
+		if actual_name != name {
+			warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, "Process name mismatch, marking as stale");
+			return Ok(true);
 		}
 		return Ok(false);
 	}
@@ -179,9 +177,10 @@ async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>
 	Ok(true)
 }
 
-async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: Option<String>) -> Result<()> {
+async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: String) -> Result<()> {
 	let path_str = path.to_string_lossy();
-	if is_pid_stale(&sys, &path, expected_name.as_deref()).await? {
+
+	if is_pid_stale(&sys, &path, &expected_name).await? {
 		tokio_fs::remove_file(&path).await
 			.with_context(|| format!("Failed to remove stale pid file {:?}", path))?;
 		info!(path = %path_str, "Removed stale pid file");
@@ -226,13 +225,13 @@ async fn main() -> Result<()> {
 	let mut sys_raw = System::new_all();
 	sys_raw.refresh_all();
 	let sys = Arc::new(sys_raw);
-	let global_name = args.process_name.clone();
+	// let global_name = args.process_name.clone();
 
 	let mut tasks = JoinSet::new();
 
 	if let Some(ref pids) = args.pid_files {
 		for pid_proc in pids {
-			let name = pid_proc.name.clone().or(global_name.clone());
+			let name = pid_proc.name.clone();
 			let file = pid_proc.file.clone();
 			let sys_clone = Arc::clone(&sys);
 			tasks.spawn(async move {
@@ -244,7 +243,7 @@ async fn main() -> Result<()> {
 	if let Some(ref dir) = args.pidpair_dir {
 		let pids = load_pid_pairs_from_dir(dir).with_context(|| format!("Failed to load pid pairs from {:?}", dir))?;
 		for pid_proc in pids {
-			let name = pid_proc.name.clone().or(global_name.clone());
+			let name = pid_proc.name.clone();
 			let file = pid_proc.file.clone();
 			let sys_clone = Arc::clone(&sys);
 			tasks.spawn(async move {
@@ -253,24 +252,25 @@ async fn main() -> Result<()> {
 		}
 	}
 
-	if let Some(ref dir) = args.directory {
-		let mut entries = tokio_fs::read_dir(dir).await?;
-		while let Some(entry) = entries.next_entry().await? {
-			let path = entry.path();
-			if path.is_file() {
-				let path_str = path.to_string_lossy();
-				if path_str.ends_with(&args.extension) {
-					let name = global_name.clone();
-					let sys_clone = Arc::clone(&sys);
-					tasks.spawn(async move {
-						handle_pid_file(sys_clone, path, name).await
-					});
-				}
-			}
-		}
-	}
+	// if let Some(ref dir) = args.directory {
+	// 	let mut entries = tokio_fs::read_dir(dir).await?;
+	// 	while let Some(entry) = entries.next_entry().await? {
+	// 		let path = entry.path();
+	// 		if path.is_file() {
+	// 			let path_str = path.to_string_lossy();
+	// 			if path_str.ends_with(&args.extension) {
+	// 				let name = global_name.clone();
+	// 				let sys_clone = Arc::clone(&sys);
+	// 				tasks.spawn(async move {
+	// 					handle_pid_file(sys_clone, path, name).await
+	// 				});
+	// 			}
+	// 		}
+	// 	}
+	// }
 
-	if args.pid_files.is_none() && args.directory.is_none() && args.pidpair_dir.is_none() {
+	// if args.pid_files.is_none() && args.directory.is_none() && args.pidpair_dir.is_none() {
+	if args.pid_files.is_none() && args.pidpair_dir.is_none() {
 		error!("Neither -p, -d, nor --pidpair-dir specified");
 		anyhow::bail!("Either -p, -d, or --pidpair-dir must be specified");
 	}
