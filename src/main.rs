@@ -45,26 +45,37 @@ impl FromStr for PidProc {
 		if s.starts_with('{') && s.ends_with('}') {
 			let inner = &s[1..s.len() - 1];
 			let parts: Vec<&str> = inner.split(',').collect();
-			let mut file = String::new();
+			let mut file: Option<String> = None;
 			let mut name: Option<String> = None;
 
 			for (i, part) in parts.iter().enumerate() {
 				let trimmed = part.trim();
 				let trimmed = parse_quoted(trimmed)?;
 				if i == 0 {
-					file = trimmed.to_string();
+					file = Some(trimmed.to_string());
 				} else if i == 1 {
 					name = Some(trimmed.to_string());
 				}
 			}
+
+			let name = name.ok_or_else(|| anyhow::anyhow!("name was none"))?;
+			let file = file.ok_or_else(|| anyhow::anyhow!("file was none"))?;
+
 			if file.is_empty() {
 				anyhow::bail!("PID file path cannot be empty in brace format");
 			}
-			let name = name.ok_or_else(|| anyhow::anyhow!("name was none"))?;
 			return Ok(PidProc {
 				file: PathBuf::from(file),
 				name,
 			});
+		}
+
+		if s.starts_with('{') {
+			return Err(anyhow::anyhow!("opening {{ but no closing"))
+		}
+
+		if s.ends_with('}') {
+			return Err(anyhow::anyhow!("closing }} but no opening"))
 		}
 
 		if let Some((path, name)) = s.split_once('=') {
