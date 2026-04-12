@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::option;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use walkdir::WalkDir;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PidProc {
 	file: PathBuf,
-	name: Option<String>,
+	name: String,
 }
 
 impl FromStr for PidProc {
@@ -26,7 +27,7 @@ impl FromStr for PidProc {
 			let inner = &s[1..s.len() - 1];
 			let parts: Vec<&str> = inner.split(',').collect();
 			let mut file = String::new();
-			let mut name = None;
+			let mut name: Option<String> = None;
 
 			for (i, part) in parts.iter().enumerate() {
 				let trimmed = part.trim().trim_matches('\'').trim_matches('"');
@@ -39,6 +40,7 @@ impl FromStr for PidProc {
 			if file.is_empty() {
 				anyhow::bail!("PID file path cannot be empty in brace format");
 			}
+			let name = name.ok_or_else(|| anyhow::anyhow!("name was none"))?;
 			return Ok(PidProc {
 				file: PathBuf::from(file),
 				name,
@@ -46,16 +48,23 @@ impl FromStr for PidProc {
 		}
 
 		if let Some((path, name)) = s.split_once('=') {
+			if name.is_empty() {
+				return Err(anyhow::anyhow!("name was empty"));
+			}
+
 			return Ok(PidProc {
 				file: PathBuf::from(path),
-				name: Some(name.to_string()),
+				name: name.to_string(),
 			});
 		}
 
-		Ok(PidProc {
-			file: PathBuf::from(s),
-			name: None,
-		})
+
+		return Err(anyhow::anyhow!("name was never found"));
+
+		// Ok(PidProc {
+		// 	file: PathBuf::from(s),
+		// 	name: "".to_string(),
+		// })
 	}
 }
 
