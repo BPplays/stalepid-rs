@@ -5,13 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-chrono = "0.4.44"
 clap = { version = "4.6.0", features = ["derive"] }
-flexi_logger = "0.31.8"
-log = "0.4.29"
 quoted-string = "0.6.1"
 sysinfo = "0.38.4"
 tokio = { version = "1.51.1", features = ["full"] }
-tracing = "0.1.44"
-tracing-appender = "0.2.4"
-tracing-subscriber = "0.3.23"

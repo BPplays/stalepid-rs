@@ -6,8 +6,6 @@ use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tokio::fs as tokio_fs;
 use tokio::task::JoinSet;
-use log::{info, warn, error};
-use flexi_logger::{Logger, FileSpec, LogSpecification, Criterion, Age};
 
 #[derive(Debug, Clone)]
 struct PidProc {
@@ -15,10 +13,29 @@ struct PidProc {
 	name: Option<String>,
 }
 
+fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
+    let start = s.find(left)? + left.len_utf8();
+    let rest = &s[start..];
+    let end = rest.find(right)?;
+    Some(&rest[..end])
+}
+
+#[derive(Debug)]
+enum ParseError {
+    MissingQuotedString,
+}
+
+fn parse_quoted(i: &str) -> Result<&str> {
+    between_chars(i, '"', '"')
+        .ok_or(ParseError::MissingQuotedString)
+        .map_err(|e| anyhow::anyhow!("{:?}", e))
+}
+
 impl FromStr for PidProc {
 	type Err = anyhow::Error;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		// Handle brace format: {path,name} or {path}
 		if s.starts_with('{') && s.ends_with('}') {
 			let inner = &s[1..s.len() - 1];
 			let parts: Vec<&str> = inner.split(',').collect();
@@ -26,7 +43,8 @@ impl FromStr for PidProc {
 			let mut name = None;
 
 			for (i, part) in parts.iter().enumerate() {
-				let trimmed = part.trim().trim_matches('\'').trim_matches('"');
+				// let trimmed = part.trim().trim_matches('\'').trim_matches('"');
+				let trimmed = parse_quoted(part)?;
 				if i == 0 {
 					file = trimmed.to_string();
 				} else if i == 1 {
@@ -42,6 +60,7 @@ impl FromStr for PidProc {
 			});
 		}
 
+		// Handle path=name format
 		if let Some((path, name)) = s.split_once('=') {
 			return Ok(PidProc {
 				file: PathBuf::from(path),
@@ -49,6 +68,7 @@ impl FromStr for PidProc {
 			});
 		}
 
+		// Handle plain path format
 		Ok(PidProc {
 			file: PathBuf::from(s),
 			name: None,
@@ -61,7 +81,7 @@ impl FromStr for PidProc {
 struct Args {
 	/// List of PID files to check. Format: <path>, <path>=<process_name>, or {<path>,<process_name>}
 	#[arg(short = 'p', num_args = 1..)]
-	pid_files: Option<Vec<String>>,
+	pid_files: Option<Vec<PidProc>>,
 
 	/// Directory to scan for PID files
 	#[arg(short = 'd')]
@@ -72,48 +92,8 @@ struct Args {
 	extension: String,
 
 	/// Process name to validate against.
+	/// Acts as fallback for -p files without explicit names and as the filter for -d.
 	process_name: Option<String>,
-
-	/// Log file location. If omitted, logs to console.
-	#[arg(short = 'l', long = "log-file")]
-	log_file: Option<PathBuf>,
-
-	/// Max log size in MB
-	#[arg(short = 's', long = "log-size", default_value = "10")]
-	log_size: u64,
-}
-
-fn init_logging(log_file: Option<PathBuf>, _max_size: u64) {
-	let mut builder = Logger::try_with_env_or_str("info").unwrap();
-
-	// Custom logfmt format: time=... level=... msg="..."
-	builder.format(|_writer, message, record| {
-		format!(
-			"time={} level={} msg=\"{}\"",
-			chrono::Utc::now().to_rfc3339(),
-			record.level(),
-			message.replace('"', "\\\"")
-		)
-	});
-
-	if let Some(path) = log_file {
-		let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-		let file_name = path.file_name().unwrap_or_default().to_str().unwrap_or("stalepid.log");
-
-		builder.log_specification(LogSpecification {
-			file_specification: Some(FileSpec::default()
-				.directory(parent)
-				.basename(file_name)),
-			..Default::default()
-		});
-
-		// Size-based rotation is conceptually requested.
-		// flexi_logger's rotation is primarily based on Age/Criterion.
-		// We set a reasonable rotation criterion.
-		builder.rotate(Criterion::Age(Age::Day));
-	}
-
-	builder.start().unwrap();
 }
 
 async fn is_pid_stale(sys: &System, pid_path: &Path, expected_name: Option<&str>) -> Result<bool> {
@@ -146,7 +126,7 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: Option<
 	if is_pid_stale(&sys, &path, expected_name.as_deref()).await? {
 		tokio_fs::remove_file(&path).await
 			.with_context(|| format!("Failed to remove stale pid file {:?}", path))?;
-		info!("Removed stale pid file: {:?}", path);
+		println!("Removed stale pid file: {:?}", path);
 	}
 	Ok(())
 }
@@ -154,8 +134,6 @@ async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: Option<
 #[tokio::main]
 async fn main() -> Result<()> {
 	let args = Args::parse();
-	init_logging(args.log_file, args.log_size);
-
 	let mut sys_raw = System::new_all();
 	sys_raw.refresh_all();
 	let sys = Arc::new(sys_raw);
@@ -164,20 +142,13 @@ async fn main() -> Result<()> {
 	let mut tasks = JoinSet::new();
 
 	if let Some(ref pids) = args.pid_files {
-		for p_str in pids {
-			match PidProc::from_str(p_str) {
-				Ok(pid_proc) => {
-					let name = pid_proc.name.clone().or(global_name.clone());
-					let file = pid_proc.file.clone();
-					let sys_clone = Arc::clone(&sys);
-					tasks.spawn(async move {
-						handle_pid_file(sys_clone, file, name).await
-					});
-				},
-				Err(e) => {
-					warn!("Failed to parse pid file specification '{}': {}", p_str, e);
-				}
-			}
+		for pid_proc in pids {
+			let name = pid_proc.name.clone().or(global_name.clone());
+			let file = pid_proc.file.clone();
+			let sys_clone = Arc::clone(&sys);
+			tasks.spawn(async move {
+				handle_pid_file(sys_clone, file, name).await
+			});
 		}
 	}
 
@@ -204,9 +175,9 @@ async fn main() -> Result<()> {
 
 	while let Some(res) = tasks.join_next().await {
 		if let Err(e) = res {
-			error!("Task panicked: {}", e);
+			eprintln!("Task panicked: {}", e);
 		} else if let Ok(Err(e)) = res {
-			error!("Error processing file: {}", e);
+			eprintln!("Error processing file: {}", e);
 		}
 	}
 
