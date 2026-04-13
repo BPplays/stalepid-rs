@@ -151,6 +151,8 @@ fn init_logging(args: &Args) -> Result<()> {
 
 		if let Some(size) = args.max_log_size_mb {
 			builder = builder.rotation(Rotation::SizeBased(RotationSize::MB(size)));
+		} else {
+			builder = builder.rotation(Rotation::SizeBased(RotationSize::MB(10)));
 		}
 
 		let appender = builder.build()?;
