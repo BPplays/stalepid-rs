@@ -17,7 +17,7 @@ struct PidProc {
 	file: PathBuf,
 	name: String,
 	#[serde(default)]
-	daemon_recurse_limt: u64,
+	daemon_recurse_limit: u64,
 }
 
 fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
@@ -171,7 +171,12 @@ fn init_logging(args: &Args) -> Result<()> {
 	Ok(())
 }
 
-async fn is_pid_stale(sys: &System, pid_path: &Path, name: &str) -> Result<bool> {
+async fn is_pid_stale(
+	sys: &System,
+	pid_path: &Path,
+	name: &str,
+	daemon_recurse_limit: &u64,
+) -> Result<bool> {
 	let path_str = pid_path.to_string_lossy();
 	let content = tokio_fs::read_to_string(pid_path).await?;
 	let pid_str = content.trim();
@@ -213,10 +218,10 @@ async fn is_pid_stale(sys: &System, pid_path: &Path, name: &str) -> Result<bool>
 	Ok(true)
 }
 
-async fn handle_pid_file(sys: Arc<System>, path: PathBuf, expected_name: String) -> Result<()> {
+async fn handle_pid_file(sys: Arc<System>, pid_proc: &PidProc) -> Result<()> {
 	let path_str = path.to_string_lossy();
 
-	if is_pid_stale(&sys, &path, &expected_name).await? {
+	if is_pid_stale(&sys, &pid_proc.file, &pid_proc.name, &pid_proc.daemon_recurse_limit).await? {
 		if path.is_relative() {
 			return Err(anyhow::anyhow!("path shouldn't be relative"))
 		}
@@ -273,11 +278,9 @@ async fn main() -> Result<()> {
 
 	if let Some(ref pids) = args.pid_files {
 		for pid_proc in pids {
-			let name = pid_proc.name.clone();
-			let file = pid_proc.file.clone();
 			let sys_clone = Arc::clone(&sys);
 			tasks.spawn(async move {
-				handle_pid_file(sys_clone, file, name).await
+				handle_pid_file(sys_clone, &pid_proc).await
 			});
 		}
 	}
@@ -285,11 +288,9 @@ async fn main() -> Result<()> {
 	if let Some(ref dir) = args.pidpair_dir {
 		let pids = load_pid_pairs_from_dir(dir).with_context(|| format!("Failed to load pid pairs from {:?}", dir))?;
 		for pid_proc in pids {
-			let name = pid_proc.name.clone();
-			let file = pid_proc.file.clone();
 			let sys_clone = Arc::clone(&sys);
 			tasks.spawn(async move {
-				handle_pid_file(sys_clone, file, name).await
+				handle_pid_file(sys_clone, &pid_proc).await
 			});
 		}
 	}
