@@ -12,10 +12,12 @@ use tracing::{info, warn, error};
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PidProc {
 	file: PathBuf,
 	name: String,
+	#[serde(default)]
+	daemon_recurse_limt: u64,
 }
 
 fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
@@ -197,6 +199,9 @@ async fn is_pid_stale(sys: &System, pid_path: &Path, name: &str) -> Result<bool>
 			.map(|s| s.to_string_lossy())
 			.collect::<Vec<_>>()
 			.join(" ");
+
+
+
 		if actual_name != name {
 			warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, exe = %exe_str, cmd = %cmd_str, "Process name mismatch, marking as stale");
 			return Ok(false);
