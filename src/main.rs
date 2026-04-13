@@ -116,9 +116,9 @@ struct Args {
 	// #[arg(short = 'd')]
 	// directory: Option<PathBuf>,
 
-	/// File extension to use when scanning a directory
-	#[arg(short = 'e', default_value = ".pid")]
-	extension: String,
+	// /// File extension to use when scanning a directory
+	// #[arg(short = 'e', default_value = ".pid")]
+	// extension: String,
 
 	// /// Process name to validate against.
 	// /// Acts as fallback for -p files without explicit names and as the filter for -d.
@@ -132,9 +132,9 @@ struct Args {
 	#[arg(long)]
 	log_path: Option<PathBuf>,
 
-	/// Maximum size of the log file in bytes before rotation.
-	#[arg(long)]
-	max_log_size: Option<u64>,
+	/// Maximum size of the log file in megabytes before rotation.
+	#[arg(long, default_value = "10")]
+	max_log_size_mb: Option<u64>,
 }
 
 fn init_logging(args: &Args) -> Result<()> {
@@ -149,8 +149,8 @@ fn init_logging(args: &Args) -> Result<()> {
 			filename
 		);
 
-		if let Some(size) = args.max_log_size {
-			builder = builder.rotation(Rotation::SizeBased(RotationSize::Bytes(size)));
+		if let Some(size) = args.max_log_size_mb {
+			builder = builder.rotation(Rotation::SizeBased(RotationSize::MB(size)));
 		}
 
 		let appender = builder.build()?;
@@ -365,4 +365,3 @@ mod tests {
 		assert!(result.is_ok());
 	}
 }
-

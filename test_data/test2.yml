@@ -1,3 +1,3 @@
 ---
-- file: "/tmp/another-file.pid"
-  name: "another-file"
+- file: "/tmp/test2-another-file.pid"
+  name: "test2-another-file"
