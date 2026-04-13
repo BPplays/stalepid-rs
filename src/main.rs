@@ -215,6 +215,7 @@ async fn is_pid_path_stale(
 	let path_str = pid_path.to_string_lossy();
 	let content = tokio_fs::read_to_string(pid_path).await?;
 	let pid_str = content.trim();
+	let mut drl = Some(daemon_recurse_limit);
 
 	if pid_str.is_empty() {
 		warn!(path = %path_str, "PID file is empty, marking as stale");
@@ -227,14 +228,19 @@ async fn is_pid_path_stale(
 
 	let pid = Pid::from(pid_val);
 
-	return is_pid_stale(sys, &pid, name, daemon_recurse_limit).await;
+	if daemon_recurse_limit == 0 {
+		info!("skipping daemon recusion, starting value is 0", path = %path_str);
+		drl = None;
+	}
+
+	return is_pid_stale(sys, &pid, name, drl).await;
 }
 
 fn is_pid_stale<'a>(
 	sys: &'a System,
 	pid: &'a Pid,
 	name: &'a str,
-	daemon_recurse_limit: u64,
+	daemon_recurse_limit: Option<u64>,
 ) -> BoxFuture<'a, Result<bool>> {
 	async move {
 	if let Some(process) = sys.process(*pid) {
@@ -252,27 +258,32 @@ fn is_pid_stale<'a>(
 			.collect::<Vec<_>>()
 			.join(" ");
 
-		if daemon_recurse_limit > 0 {
-			let daemon_name = match_daemon_name(&actual_name).await;
-			match daemon_name {
-				Ok(dn) => {
-					info!(
-						child_name = %dn.name,
-						child_pid = %dn.pid,
-						"daemon child found"
-					);
+		if daemon_recurse_limit.is_some() {
+			let daemon_recurse_limit = daemon_recurse_limit.unwrap_or(0);
+			if daemon_recurse_limit > 0 {
+				let daemon_name = match_daemon_name(&actual_name).await;
+				match daemon_name {
+					Ok(dn) => {
+						info!(
+							child_name = %dn.name,
+							child_pid = %dn.pid,
+							"daemon child found"
+						);
 
-					return is_pid_stale(
-						sys,
-						&dn.pid,
-						name,
-						daemon_recurse_limit - 1,
-					)
-					.await;
+						return is_pid_stale(
+							sys,
+							&dn.pid,
+							name,
+							some(daemon_recurse_limit - 1),
+						)
+						.await;
+					}
+					Err(err) => {
+						info!(reason = %err, name = %actual_name, "daemon name not found");
+					}
 				}
-				Err(err) => {
-					info!(reason = %err, name = %actual_name, "daemon name not found");
-				}
+			} else if daemon_recurse_limit <= 0 {
+				info!("daemon recuse limit is now 0")
 			}
 		}
 
@@ -285,7 +296,7 @@ fn is_pid_stale<'a>(
 				cmd = %cmd_str,
 				"Process name mismatch, marking as stale"
 			);
-			return Ok(false);
+			return Ok(true);
 		}
 
 
