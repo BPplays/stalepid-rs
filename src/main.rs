@@ -84,7 +84,7 @@ impl FromStr for PidProc {
 			return Ok(PidProc {
 				file: PathBuf::from(file),
 				name: name,
-				daemon_recurse_limit: 0,
+				daemon_recurse_limit: Some(0),
 			});
 		}
 
@@ -107,7 +107,7 @@ impl FromStr for PidProc {
 			return Ok(PidProc {
 				file: PathBuf::from(path),
 				name: name.to_string(),
-				daemon_recurse_limit: 0,
+				daemon_recurse_limit: Some(0),
 			});
 		}
 
@@ -214,6 +214,7 @@ async fn is_pid_path_stale(
 	let path_str = pid_path.to_string_lossy();
 	let content = tokio_fs::read_to_string(pid_path).await?;
 	let pid_str = content.trim();
+	let mut daemon_recurse_limit = daemon_recurse_limit;
 
 	if pid_str.is_empty() {
 		warn!(path = %path_str, "PID file is empty, marking as stale");
@@ -227,7 +228,7 @@ async fn is_pid_path_stale(
 	let pid = Pid::from(pid_val);
 
 	match daemon_recurse_limit {
-		None() => {
+		None => {
 			info!(path = %path_str, "skipping daemon recusion, value is `None`");
 		}
 		Some(drl) => {
