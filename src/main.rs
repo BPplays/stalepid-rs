@@ -330,6 +330,9 @@ async fn handle_pid_file(sys: Arc<System>, pid_proc: &PidProc) -> Result<()> {
 		&pid_proc.name,
 		pid_proc.daemon_recurse_limit,
 	).await? {
+		if !path.is_absolute() {
+			return Err(anyhow::anyhow!("path must be absolute"))
+		}
 		if !path.is_file() {
 			return Err(anyhow::anyhow!("path isn't file"))
 		}
