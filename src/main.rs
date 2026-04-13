@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -11,6 +11,8 @@ use tracing::{info, warn, error};
 // use tracing_subscriber::{fmt, prelude::*};
 use logroller::{LogRollerBuilder, Rotation, RotationSize};
 use walkdir::WalkDir;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PidProc {
@@ -18,6 +20,12 @@ struct PidProc {
 	name: String,
 	#[serde(default)]
 	daemon_recurse_limit: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonName {
+	name: String,
+	pid: Pid,
 }
 
 fn between_chars<'a>(s: &'a str, left: char, right: char) -> Option<&'a str> {
@@ -76,7 +84,8 @@ impl FromStr for PidProc {
 			}
 			return Ok(PidProc {
 				file: PathBuf::from(file),
-				name,
+				name: name,
+				daemon_recurse_limit: 0,
 			});
 		}
 
@@ -99,6 +108,7 @@ impl FromStr for PidProc {
 			return Ok(PidProc {
 				file: PathBuf::from(path),
 				name: name.to_string(),
+				daemon_recurse_limit: 0,
 			});
 		}
 
@@ -171,11 +181,36 @@ fn init_logging(args: &Args) -> Result<()> {
 	Ok(())
 }
 
-async fn is_pid_stale(
+async fn match_daemon_name(
+	name: &str,
+) -> Result<DaemonName> {
+	let s = name
+		.strip_prefix("daemon: ")
+		.ok_or_else(|| anyhow!("missing daemon prefix"))?;
+
+	let (procname, rest) = s
+		.split_once('[')
+		.ok_or_else(|| anyhow!("missing pid start"))?;
+
+	let pid_str = rest
+		.strip_suffix(']')
+		.ok_or_else(|| anyhow!("missing pid end"))?;
+
+	let pidu32: u32 = pid_str.parse()?;
+	let pid: Pid = Pid::from_u32(pidu32);
+	let d = DaemonName{
+		name: procname.to_string(),
+		pid: pid,
+	};
+
+	Ok(d)
+}
+
+async fn is_pid_path_stale(
 	sys: &System,
 	pid_path: &Path,
 	name: &str,
-	daemon_recurse_limit: &u64,
+	daemon_recurse_limit: u64,
 ) -> Result<bool> {
 	let path_str = pid_path.to_string_lossy();
 	let content = tokio_fs::read_to_string(pid_path).await?;
@@ -192,39 +227,86 @@ async fn is_pid_stale(
 
 	let pid = Pid::from(pid_val);
 
-	if let Some(process) = sys.process(pid) {
+	return is_pid_stale(sys, &pid, name, daemon_recurse_limit).await;
+}
+
+fn is_pid_stale<'a>(
+	sys: &'a System,
+	pid: &'a Pid,
+	name: &'a str,
+	daemon_recurse_limit: u64,
+) -> BoxFuture<'a, Result<bool>> {
+	async move {
+	if let Some(process) = sys.process(*pid) {
 		let actual_name = process.name().to_string_lossy();
 		let cmd = process.cmd();
 		let exe = process.exe();
+
 		let exe_str = exe
 			.map(|p| p.to_string_lossy().into_owned())
 			.unwrap_or_else(|| "<none>".to_string());
+
 		let cmd_str = cmd
 			.iter()
 			.map(|s| s.to_string_lossy())
 			.collect::<Vec<_>>()
 			.join(" ");
 
+		if daemon_recurse_limit > 0 {
+			let daemon_name = match_daemon_name(&actual_name).await;
+			match daemon_name {
+				Ok(dn) => {
+					info!(
+						child_name = %dn.name,
+						child_pid = %dn.pid,
+						"daemon child found"
+					);
 
+					return is_pid_stale(
+						sys,
+						&dn.pid,
+						name,
+						daemon_recurse_limit - 1,
+					)
+					.await;
+				}
+				Err(err) => {
+					info!(err = %err, name = %actual_name, "daemon name not found");
+				}
+			}
+		}
 
 		if actual_name != name {
-			warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, exe = %exe_str, cmd = %cmd_str, "Process name mismatch, marking as stale");
+			warn!(
+				pid = %pid,
+				process_name = %actual_name,
+				expected_name = %name,
+				exe = %exe_str,
+				cmd = %cmd_str,
+				"Process name mismatch, marking as stale"
+			);
 			return Ok(false);
 		}
+
 		return Ok(false);
 	}
 
-	info!(path = %path_str, pid = pid_val, "No process found with PID, marking as stale");
+	info!(pid = %pid, "No process found with PID, marking as stale");
 	Ok(true)
+	}
+	.boxed()
 }
 
 async fn handle_pid_file(sys: Arc<System>, pid_proc: &PidProc) -> Result<()> {
-	let path_str = path.to_string_lossy();
+	let path = pid_proc.file.clone();
+	let path_str = pid_proc.file.to_string_lossy();
 
-	if is_pid_stale(&sys, &pid_proc.file, &pid_proc.name, &pid_proc.daemon_recurse_limit).await? {
-		if path.is_relative() {
-			return Err(anyhow::anyhow!("path shouldn't be relative"))
-		}
+	if is_pid_path_stale(
+		&sys,
+		&path,
+		&pid_proc.name,
+		pid_proc.daemon_recurse_limit,
+	).await? {
 		if !path.is_file() {
 			return Err(anyhow::anyhow!("path isn't file"))
 		}
@@ -279,8 +361,9 @@ async fn main() -> Result<()> {
 	if let Some(ref pids) = args.pid_files {
 		for pid_proc in pids {
 			let sys_clone = Arc::clone(&sys);
+			let pc = pid_proc.clone();
 			tasks.spawn(async move {
-				handle_pid_file(sys_clone, &pid_proc).await
+				handle_pid_file(sys_clone, &pc).await
 			});
 		}
 	}
@@ -382,4 +465,40 @@ mod tests {
 		// with the test data directory that exists
 		assert!(result.is_ok());
 	}
+
+
+	#[test]
+	fn test_match_daemon_name() {
+		let rt = tokio::runtime::Runtime::new().unwrap();
+		rt.block_on(async {
+			assert!(match_daemon_name("fdjsf").await.is_err());
+
+			let daemons = vec![
+				DaemonName {
+					name: "prg".to_string(),
+					pid: Pid::from(1111),
+				},
+				DaemonName {
+					name: "日本program".to_string(),
+					pid: Pid::from(22229),
+				},
+				DaemonName {
+					name: "sshd".to_string(),
+					pid: Pid::from(3333999),
+				},
+			];
+
+			for d in &daemons {
+				println!("daemon: {}[{}]", d.name, d.pid);
+				assert!(
+					match_daemon_name(&format!(
+							"daemon: {}[{}]",
+							d.name,
+							d.pid,
+					)).await.unwrap() == d.clone()
+				);
+			}
+		});
+	}
+
 }
