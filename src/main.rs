@@ -271,7 +271,7 @@ fn is_pid_stale<'a>(
 					.await;
 				}
 				Err(err) => {
-					info!(err = %err, name = %actual_name, "daemon name not found");
+					info!(reason = %err, name = %actual_name, "daemon name not found");
 				}
 			}
 		}
