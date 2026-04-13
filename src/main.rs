@@ -187,9 +187,19 @@ async fn is_pid_stale(sys: &System, pid_path: &Path, name: &str) -> Result<bool>
 
 	if let Some(process) = sys.process(pid) {
 		let actual_name = process.name().to_string_lossy();
+		let cmd = process.cmd();
+		let exe = process.exe();
+		let exe_str = exe
+			.map(|p| p.to_string_lossy().into_owned())
+			.unwrap_or_else(|| "<none>".to_string());
+		let cmd_str = cmd
+			.iter()
+			.map(|s| s.to_string_lossy())
+			.collect::<Vec<_>>()
+			.join(" ");
 		if actual_name != name {
-			warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, "Process name mismatch, marking as stale");
-			return Ok(true);
+			warn!(path = %path_str, pid = %pid_val, process_name = %actual_name, expected_name = %name, exe = %exe_str, cmd = %cmd_str, "Process name mismatch, marking as stale");
+			return Ok(false);
 		}
 		return Ok(false);
 	}
