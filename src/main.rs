@@ -229,7 +229,7 @@ async fn is_pid_path_stale(
 	let pid = Pid::from(pid_val);
 
 	if daemon_recurse_limit == 0 {
-		info!("skipping daemon recusion, starting value is 0", path = %path_str);
+		info!(path = %path_str, "skipping daemon recusion, starting value is 0");
 		drl = None;
 	}
 
@@ -274,7 +274,7 @@ fn is_pid_stale<'a>(
 							sys,
 							&dn.pid,
 							name,
-							some(daemon_recurse_limit - 1),
+							Some(daemon_recurse_limit - 1),
 						)
 						.await;
 					}
