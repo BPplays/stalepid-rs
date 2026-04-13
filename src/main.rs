@@ -292,9 +292,6 @@ fn is_pid_stale<'a>(
 		info!(
 			pid = %pid,
 			process_name = %actual_name,
-			expected_name = %name,
-			exe = %exe_str,
-			cmd = %cmd_str,
 			"pid file is not stale"
 		);
 		return Ok(false);
