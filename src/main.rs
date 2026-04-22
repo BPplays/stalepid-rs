@@ -143,6 +143,14 @@ struct Args {
 	#[arg(long)]
 	log_path: Option<PathBuf>,
 
+	/// Number of times to retry checking if the PID exists.
+	#[arg(short = 'r', long, default_value = "5")]
+	retries: u32,
+
+	/// Wait time between retries in milliseconds.
+	#[arg(short = 'w', long, default_value = "1100")]
+	wait_ms: u64,
+
 	/// Maximum size of the log file in megabytes before rotation.
 	#[arg(long, default_value = "10")]
 	max_log_size_mb: Option<u64>,
@@ -320,16 +328,27 @@ fn is_pid_stale<'a>(
 	.boxed()
 }
 
-async fn handle_pid_file(sys: Arc<System>, pid_proc: &PidProc) -> Result<()> {
+async fn handle_pid_file(sys: Arc<System>, pid_proc: &PidProc, retries: u32, wait_ms: u64) -> Result<()> {
 	let path = pid_proc.file.clone();
 	let path_str = pid_proc.file.to_string_lossy();
 
-	if is_pid_path_stale(
-		&sys,
-		&path,
-		&pid_proc.name,
-		pid_proc.daemon_recurse_limit,
-	).await? {
+	let mut is_stale = true;
+	for i in 0..retries {
+		if !is_pid_path_stale(
+			&sys,
+			&path,
+			&pid_proc.name,
+			pid_proc.daemon_recurse_limit,
+		).await? {
+			is_stale = false;
+			break;
+		}
+		if i < retries - 1 {
+			tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+		}
+	}
+
+	if is_stale {
 		if !path.is_absolute() {
 			return Err(anyhow::anyhow!("path must be absolute"))
 		}
@@ -371,6 +390,8 @@ fn load_pid_pairs_from_dir(dir: &Path) -> Result<Vec<PidProc>> {
 #[tokio::main]
 async fn main() -> Result<()> {
 	let args = Args::parse();
+	let retries = args.retries;
+	let wait_ms = args.wait_ms;
 
 	if let Err(e) = init_logging(&args) {
 		eprintln!("Failed to initialize logging: {}", e);
@@ -389,7 +410,7 @@ async fn main() -> Result<()> {
 			let sys_clone = Arc::clone(&sys);
 			let pc = pid_proc.clone();
 			tasks.spawn(async move {
-				handle_pid_file(sys_clone, &pc).await
+				handle_pid_file(sys_clone, &pc, retries, wait_ms).await
 			});
 		}
 	}
@@ -399,7 +420,7 @@ async fn main() -> Result<()> {
 		for pid_proc in pids {
 			let sys_clone = Arc::clone(&sys);
 			tasks.spawn(async move {
-				handle_pid_file(sys_clone, &pid_proc).await
+				handle_pid_file(sys_clone, &pid_proc, retries, wait_ms).await
 			});
 		}
 	}
